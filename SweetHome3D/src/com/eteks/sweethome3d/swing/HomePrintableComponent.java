@@ -193,6 +193,8 @@ public class HomePrintableComponent extends JComponent implements Printable {
     g2D.fill(new Rectangle2D.Double(0, 0, pageFormat.getWidth(), pageFormat.getHeight()));
 
     Paper oldPaper = pageFormat.getPaper();
+    final Level previousSelectedLevel = this.home.getSelectedLevel();
+    Level[] viewableLevels = getViewableLevels();
     try {
       // Let the user be able to force a fixed margin in case of bugs in page setup dialogs or printer drivers
       String fixedPrintMargin = System.getProperty("com.eteks.sweethome3d.swing.fixedPrintMargin", null);
@@ -341,53 +343,75 @@ public class HomePrintableComponent extends JComponent implements Printable {
             clipBounds.width, (int)pageFormat.getImageableHeight());
       }
     }
-    
+
     View furnitureView = this.controller.getFurnitureController().getView();
-    if (furnitureView != null 
-        && (homePrint == null || homePrint.isFurniturePrinted())) {
+    if (furnitureView != null
+            && (homePrint == null || homePrint.isFurniturePrinted())) {
       FurnitureTable furnitureTable = null;
       final FurnitureTable.FurnitureFilter furnitureFilter;
+      HomePieceOfFurniture.SortableProperty[] previousVisibleProperties = null;
       if (furnitureView instanceof FurnitureTable
-          && (homePrint == null
+              && (homePrint == null
               || homePrint.isPlanPrinted()
               || homePrint.isView3DPrinted())) {
-        final Level selectedLevel = home.getSelectedLevel();
         furnitureTable = (FurnitureTable)furnitureView;
         furnitureFilter = furnitureTable.getFurnitureFilter();
         furnitureTable.setFurnitureFilter(new FurnitureTable.FurnitureFilter() {
-            public boolean include(Home home, HomePieceOfFurniture piece) {
-              // Print only furniture at selected level when the plan or the 3D view is printed
-              return (furnitureFilter == null || furnitureFilter.include(home, piece))
-                  && piece.isAtLevel(selectedLevel)
-                  && (piece.getLevel() == null || piece.getLevel().isViewable());
-            }
-          });
+          public boolean include(Home home, HomePieceOfFurniture piece) {
+            // Print furniture on every viewable level
+            return (furnitureFilter == null || furnitureFilter.include(home, piece))
+                    && (piece.getLevel() == null || piece.getLevel().isViewable());
+          }
+        });
+        // Temporarily include Level column when printing multi-level homes
+        HomePieceOfFurniture.SortableProperty[] currentProps =
+                this.home.getFurnitureVisibleProperties().toArray(new HomePieceOfFurniture.SortableProperty[this.home.getFurnitureVisibleProperties().size()]);
+        boolean hasLevelColumn = false;
+        for (HomePieceOfFurniture.SortableProperty prop : currentProps) {
+          if (prop == HomePieceOfFurniture.SortableProperty.LEVEL) {
+            hasLevelColumn = true;
+            break;
+          }
+        }
+        if (viewableLevels.length > 1 && !hasLevelColumn) {
+          previousVisibleProperties = currentProps;
+          HomePieceOfFurniture.SortableProperty[] printProps =
+                  java.util.Arrays.copyOf(currentProps, currentProps.length + 1);
+          printProps[currentProps.length] = HomePieceOfFurniture.SortableProperty.LEVEL;
+          this.home.setFurnitureVisibleProperties(java.util.Arrays.asList(printProps));
+        }
+
       } else {
         furnitureFilter = null;
       }
-      // Try to print next furniture view page      
-      pageExists = ((Printable)furnitureView).print(g2D, pageFormat, page);
-      if (furnitureTable != null) {
-        // Restore previous filter
-        ((FurnitureTable)furnitureView).setFurnitureFilter(furnitureFilter);
+      try {
+        // Try to print next furniture view page
+        pageExists = ((Printable)furnitureView).print(g2D, pageFormat, page);
+      } finally {
+        if (furnitureTable != null) {
+          furnitureTable.setFurnitureFilter(furnitureFilter);
+        }
+        if (previousVisibleProperties != null) {
+          this.home.setFurnitureVisibleProperties(java.util.Arrays.asList(previousVisibleProperties));
+        }
       }
       if (pageExists == PAGE_EXISTS
-          && !this.printablePages.contains(page)) {
+              && !this.printablePages.contains(page)) {
         this.printablePages.add(page);
         this.furniturePageCount++;
       }
     }
-    if (pageExists == NO_SUCH_PAGE 
-        && planView != null 
-        && (homePrint == null || homePrint.isPlanPrinted())) {
-      // Try to print next plan view page
+    if (pageExists == NO_SUCH_PAGE
+            && planView != null
+            && (homePrint == null || homePrint.isPlanPrinted())) {
       pageExists = ((Printable)planView).print(g2D, pageFormat, page - this.furniturePageCount);
       if (pageExists == PAGE_EXISTS
-          && !this.printablePages.contains(page)) {
+              && !this.printablePages.contains(page)) {
         this.printablePages.add(page);
         this.planPageCount++;
       }
     }
+
     View view3D = this.controller.getHomeController3D().getView();
     if (pageExists == NO_SUCH_PAGE
         && view3D != null
@@ -421,10 +445,30 @@ public class HomePrintableComponent extends JComponent implements Printable {
         fixedFooterPageLabel.print(g2D);
         g2D.translate(-xFixedFooter, -yFixedFooter);
       }
-    }  
-    pageFormat.setPaper(oldPaper);    
+    }
+
+    pageFormat.setPaper(oldPaper);
     return pageExists;
   }
+
+  private Level[] getViewableLevels() {
+    Level[] allLevels = this.home.getLevels().toArray(new Level[0]);
+    int count = 0;
+    for (Level level : allLevels) {
+      if (level.isViewable()) {
+        count++;
+      }
+    }
+    Level[] viewableLevels = new Level[count];
+    int index = 0;
+    for (Level level : allLevels) {
+      if (level.isViewable()) {
+        viewableLevels[index++] = level;
+      }
+    }
+    return viewableLevels;
+  }
+
 
   /**
    * Returns the preferred size of this component according to paper orientation and size
